@@ -40,8 +40,10 @@
 // @cond SKIP
 #include <deal.II/base/conditional_ostream.h>
 
+#include <deal.II/base/geometry_info.h>
 #include <deal.II/distributed/grid_refinement.h>
 
+#include <deal.II/grid/cell_id.h>
 #include <deal.II/lac/solver_cg.h>
 #include <deal.II/lac/affine_constraints.h>
 
@@ -64,6 +66,7 @@
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
+#include <mpi.h>
 
 namespace Step45
 {
@@ -78,11 +81,21 @@ namespace Step45
 
   private:
     void create_mesh();
+    bool resolve_improved();
+    bool resolve_improved_2();
     void setup_dofs();
     void assemble_system();
     void solve();
     void output_results(const unsigned int refinement_cycle) const;
     void refine_mesh();
+    void resolve_hanging_on_periodic_boundary();
+    void resolve_hanging_on_periodic_boundary_2();
+    void resolve_refine_flags_on_periodic_boundary();
+    void exchange_refinement_flags();
+    int count_periodic_faces();
+    int verifier();
+
+
 
     const unsigned int degree;
 
@@ -125,7 +138,7 @@ namespace Step45
                               Vector<double> &  value) const override;
   };
 
-
+  
   template <int dim>
   double BoundaryValues<dim>::value(const Point<dim> & /*p*/,
                                     const unsigned int component) const
@@ -301,6 +314,25 @@ namespace Step45
   // @endcond
   //
   // @sect3{Setting up periodicity constraints on distributed triangulations}
+  template<int dim>
+  int StokesProblem<dim>::verifier(){
+    Vector<float> debug_verifier(triangulation.n_active_cells());
+    int count=0;
+    for(auto& cell:triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            if(cell->periodic_neighbor_is_coarser(i)){
+              // debug_verifier(cell->periodic_neighbor(i)->active_cell_index())
+              ++count;
+            }
+          }
+        }
+      }
+    }
+    return count;
+
+  }
   template <int dim>
   void StokesProblem<dim>::create_mesh()
   {
@@ -308,8 +340,12 @@ namespace Step45
     const double inner_radius = .5;
     const double outer_radius = 1.;
 
-    GridGenerator::quarter_hyper_shell(
-      triangulation, center, inner_radius, outer_radius, 0, true);
+    // GridGenerator::quarter_hyper_shell(
+    //   triangulation, center, inner_radius, outer_radius, 0, true);
+    GridGenerator::hyper_cube(triangulation,0,1,true);
+    
+    
+
 
     // Before we can prescribe periodicity constraints, we need to ensure that
     // cells on opposite sides of the domain but connected by periodic faces are
@@ -336,21 +372,41 @@ namespace Step45
     FullMatrix<double> rotation_matrix(dim);
     rotation_matrix[0][1] = 1.;
     rotation_matrix[1][0] = -1.;
-
+    
     GridTools::collect_periodic_faces(triangulation,
                                       2,
                                       3,
                                       1,
-                                      periodicity_vector,
-                                      Tensor<1, dim>(),
-                                      rotation_matrix);
+                                      periodicity_vector
+                                      );
 
     // Now telling the triangulation about the desired periodicity is
     // particularly easy by just calling
     // parallel::distributed::Triangulation::add_periodicity.
     triangulation.add_periodicity(periodicity_vector);
 
-    triangulation.refine_global(4 - dim);
+    triangulation.refine_global(2);
+    output_results(0);
+    const auto refinement_subdomain_predicate = [&](const auto &cell) {
+      return (cell->center()(1) > 0.75 && cell->center()(1)<1 && cell->center()(2)<.25);
+    };
+
+    for (auto &cell :
+         triangulation.active_cell_iterators() | refinement_subdomain_predicate){
+        cell->set_refine_flag();
+       
+      }
+      triangulation.execute_coarsening_and_refinement();
+
+
+    // resolve_hanging_on_periodic_boundary_2();
+
+    output_results(1);
+
+    
+    
+
+
   }
 
 
@@ -437,6 +493,8 @@ namespace Step45
         periodicity_vector;
 
       const unsigned int direction = 1;
+
+      std::cout<<"here";
 
       GridTools::collect_periodic_faces(dof_handler,
                                         2,
@@ -697,6 +755,7 @@ namespace Step45
 
 
 
+
   template <int dim>
   void
   StokesProblem<dim>::output_results(const unsigned int refinement_cycle) const
@@ -712,67 +771,465 @@ namespace Step45
 
     DataOut<dim> data_out;
     data_out.attach_dof_handler(dof_handler);
-    data_out.add_data_vector(solution,
-                             solution_names,
-                             DataOut<dim>::type_dof_data,
-                             data_component_interpretation);
+    // data_out.add_data_vector(solution,
+    //                          solution_names,
+    //                          DataOut<dim>::type_dof_data,
+    //                          data_component_interpretation);
     Vector<float> subdomain(triangulation.n_active_cells());
+    Vector<float> debug_verifier;
+
     for (unsigned int i = 0; i < subdomain.size(); ++i)
       subdomain(i) = triangulation.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
-    data_out.build_patches(mapping, degree + 1);
+    // data_out.add_data_vector(debug_verifier,"debug_verifier");
+    data_out.build_patches();
 
     data_out.write_vtu_with_pvtu_record(
-      "./", "solution", refinement_cycle, MPI_COMM_WORLD, 2);
+      "./", "sol", refinement_cycle, MPI_COMM_WORLD, 2);
   }
 
+  
+
+
+  template<int dim>
+  void StokesProblem<dim>::resolve_hanging_on_periodic_boundary_2(){
+    for(auto & cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()){
+        cell->clear_refine_flag();
+      }
+    }
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()&& cell -> at_boundary()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            if(cell->periodic_neighbor_is_coarser(i)){
+              cell->periodic_neighbor(i)->set_refine_flag();
+              std::cout << "Marking a ghost!" << std::endl;
+            }
+          }
+        }
+      }
+    }
+    
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(
+       cell->is_ghost() && cell->at_boundary()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i) && cell->periodic_neighbor_is_coarser(i)){
+            cell->periodic_neighbor(i)->set_refine_flag();
+              std::cout << "Marking a locak!" << std::endl;
+
+          }
+        }
+
+      }
+    }
+   
+    triangulation.execute_coarsening_and_refinement();
+  }
+
+  template<int dim>
+  void StokesProblem<dim>::resolve_hanging_on_periodic_boundary(){
+    // output_results(1);
+    std::vector<CellId> list;
+    std::vector<CellId> local_boundary_cells;
+    int local_count=0;
+    // int* local_count=(int*)malloc (sizeof(int));
+    // local_count[0]=0;
+    int* recvcounts;
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()){
+        cell->clear_refine_flag();
+
+      }
+    }
+    
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned() && cell->at_boundary()){
+        local_boundary_cells.push_back(cell->id());
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell-> has_periodic_neighbor(i)){
+            if(cell-> periodic_neighbor_is_coarser(i)){
+              list.push_back(cell->periodic_neighbor(i)->id());
+              ++local_count;
+            }
+          }
+        }
+      }
+    }
+    std::cout<<"local count is "<<local_count<<"\n";
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    int* convert_list=(int*)malloc(sizeof(unsigned int)*list.size()*4);
+    for(unsigned int i=0;i<list.size();++i){
+      std::array<unsigned int,4> temp=list[i].to_binary<dim>();
+      // std::cout<<MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank)<<":";
+      for(unsigned int j=0;j<4;++j){
+        convert_list[4*i+j]= temp[j];
+        std::cout<<convert_list[4*i+j]<<" ";
+      }
+      std::cout<<"\n";
+
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    int ranks; //number of ranks
+
+    MPI_Comm_size(MPI_COMM_WORLD,&ranks);
+    int comm_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank);
+
+    if(comm_rank==0)
+      std::cout<<"number of ranks"<<ranks<<"\n";
+
+    
+    int count=count_periodic_faces();
+    int global_count;
+    int my_id;
+    MPI_Comm_rank(MPI_COMM_WORLD,&my_id);
+    MPI_Reduce(&count,&global_count,1,MPI_INT,MPI_SUM,0,MPI_COMM_WORLD);
+    MPI_Bcast(&global_count,1,MPI_INT,0,MPI_COMM_WORLD);
+    int stride=2; //create formula for value
+    std::cout<<"stride is "<<stride;
+    int *displs;
+    displs=(int* )malloc(ranks*sizeof(int));
+    for(int i=0;i<ranks;++i){
+      displs[i]=i*stride;
+
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+  
+    int* global_list=(int* )malloc(global_count*sizeof(int)*8);
+
+    recvcounts=(int*)malloc(ranks*sizeof(int)); //will be used to gather cell ids
+    local_count=local_count*4;
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Allgather(&local_count,1,MPI_INT,recvcounts,1,MPI_INT,MPI_COMM_WORLD);
+    displs[0]=0;
+    for(int i=1;i<ranks;++i){
+      displs[i]=displs[i-1]+recvcounts[i-1];
+    }
+    std::cout<<"numbmer of periodic faces is "<<global_count<<"\n";
+    if(comm_rank==0){
+      for(int i=0;i<ranks;++i){
+        std::cout<<"displs["<<i<<"]="<<displs[i]<<"\n";
+      }
+    }
+    std::cout<<"\n list size is "<<list.size();
+    MPI_Barrier(MPI_COMM_WORLD);
+ 
+
+    std::cout<<"convert_list: \n";
+
+    for(int i=0;i<list.size()*4;++i){
+      std::cout<<convert_list[i]<<" ";
+    }
+    MPI_Allgatherv(convert_list,list.size()*4,MPI_INT,global_list,recvcounts,displs,MPI_INT,MPI_COMM_WORLD); 
+  
+      int sum_recvcounts=0;               //fix indentation
+      for(int i=0;i<ranks;++i){
+        sum_recvcounts+=recvcounts[i];
+
+      }
+      std::cout<<"\n sum_recvcounts is "<<sum_recvcounts;
+      std::cout<<"CELL IDS BELOW  \n";
+      for(int i=0;i<sum_recvcounts;++i){
+        std::cout<<global_list[i]<<" ";
+        
+      }
+    
+    std::vector<CellId> ids;
+    for(int i=0;i<sum_recvcounts/4;++i){
+      std::array<unsigned int,4> temp;
+      for(int j=0;j<4;++j){
+        temp[j]=global_list[4*i+j];
+      }
+      CellId tempid=CellId(temp);
+      ids.push_back(tempid);
+    }
+    for(int i=0;i<ids.size();++i){
+      for(int j=0;j<local_boundary_cells.size();++j){
+        if (ids[i]==local_boundary_cells[j]){
+          triangulation.create_cell_iterator(ids[i])->set_refine_flag();
+        }
+      }
+    }
+    
+    
+   
+   triangulation.execute_coarsening_and_refinement();
+      
+  }
+
+  template<int dim>
+  bool StokesProblem<dim>::resolve_improved(){
+    bool flags_set=false;
+    for(auto &cell:triangulation.active_cell_iterators()){
+      if(cell->at_boundary() && cell->refine_flag_set()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            TriaIterator<CellAccessor<dim,dim>> temp=cell->periodic_neighbor(i);
+            if(temp->is_active()&&!temp->refine_flag_set()){
+              temp->clear_coarsen_flag();
+              temp->set_refine_flag();
+              flags_set=true;
+            }
+          }
+         
+        }
+      }
+    }
+
+    return flags_set;
+  }
+ 
+  template<int dim>
+  void StokesProblem<dim>::resolve_refine_flags_on_periodic_boundary(){
+      int local_count=0;
+      std::vector<CellId> list;
+      std::vector<CellId> local_boundary_cells;
+      for(auto& cell: triangulation.active_cell_iterators()){
+        if(cell->is_locally_owned() && cell->at_boundary()){
+          local_boundary_cells.push_back(cell->id());
+        }
+      }
+      for (auto &cell : triangulation.active_cell_iterators()) {
+        
+       if(cell->is_locally_owned()  && cell->refine_flag_set()){
+         for(unsigned int i=0;i<cell->n_faces();++i){
+           if(cell->has_periodic_neighbor(i)){
+              
+             TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
+             if(neighbor->is_active()){
+              list.push_back(neighbor->id());
+              ++local_count;
+             }
+           }
+         }
+       }
+       
+     }
+
+      int* convert_list=(int*)malloc(sizeof(unsigned int)*list.size()*4);
+      for(unsigned int i=0;i<list.size();++i){
+      std::array<unsigned int,4> temp=list[i].to_binary<dim>();
+      for(unsigned int j=0;j<4;++j){
+        convert_list[4*i+j]= temp[j];
+        std::cout<<convert_list[4*i+j]<<" ";
+      }
+      std::cout<<"\n";
+
+    }
+
+     
+      int ranks; //number of ranks
+
+    MPI_Comm_size(MPI_COMM_WORLD,&ranks);
+    int comm_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank);
+
+    if(comm_rank==0)
+      std::cout<<"number of ranks"<<ranks<<"\n";
+
+    
+    int count=count_periodic_faces();
+    int global_count;
+    int my_id;
+    MPI_Comm_rank(MPI_COMM_WORLD,&my_id);
+    MPI_Reduce(&count,&global_count,1,MPI_INT,MPI_SUM,0,MPI_COMM_WORLD);
+    MPI_Bcast(&global_count,1,MPI_INT,0,MPI_COMM_WORLD);
+    int stride=2; //create formula for value
+    std::cout<<"stride is "<<stride;
+    int *displs;
+    displs=(int* )malloc(ranks*sizeof(int));
+    for(int i=0;i<ranks;++i){
+      displs[i]=i*stride;
+
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+  
+    int* global_list=(int* )malloc(global_count*sizeof(int)*8);
+
+    int* recvcounts=(int*)malloc(ranks*sizeof(int)); //will be used to gather cell ids
+    local_count=local_count*4;
+    MPI_Barrier(MPI_COMM_WORLD);
+   MPI_Allgather(&local_count,1,MPI_INT,recvcounts,1,MPI_INT,MPI_COMM_WORLD);
+
+    MPI_Allgather(&local_count,1,MPI_INT,recvcounts,1,MPI_INT,MPI_COMM_WORLD);
+    displs[0]=0;
+    for(int i=1;i<ranks;++i){
+      displs[i]=displs[i-1]+recvcounts[i-1];
+    }
+    std::cout<<"numbmer of periodic faces is "<<global_count<<"\n";
+    if(comm_rank==0){
+      for(int i=0;i<ranks;++i){
+        std::cout<<"displs["<<i<<"]="<<displs[i]<<"\n";
+      }
+    }
+    std::cout<<"\n list size is "<<list.size();
+    MPI_Barrier(MPI_COMM_WORLD);
+ 
+
+    std::cout<<"convert_list: \n";
+
+    for(int i=0;i<list.size()*4;++i){
+      std::cout<<convert_list[i]<<" ";
+    }
+    MPI_Allgatherv(convert_list,list.size()*4,MPI_INT,global_list,recvcounts,displs,MPI_INT,MPI_COMM_WORLD); 
+  
+      int sum_recvcounts=0;               //fix indentation
+      for(int i=0;i<ranks;++i){
+        sum_recvcounts+=recvcounts[i];
+
+      }
+      std::cout<<"\n sum_recvcounts is "<<sum_recvcounts;
+      std::cout<<"CELL IDS BELOW  \n";
+      for(int i=0;i<sum_recvcounts;++i){
+        std::cout<<global_list[i]<<" ";
+        
+      }
+    
+    std::vector<CellId> ids;
+    for(int i=0;i<sum_recvcounts/4;++i){
+      std::array<unsigned int,4> temp;
+      for(int j=0;j<4;++j){
+        temp[j]=global_list[4*i+j];
+      }
+      CellId tempid=CellId(temp);
+      ids.push_back(tempid);
+    }
+    for(int i=0;i<ids.size();++i){
+      for(int j=0;j<local_boundary_cells.size();++j){
+        if (ids[i]==local_boundary_cells[j]){
+          triangulation.create_cell_iterator(ids[i])->set_refine_flag();
+        }
+      }
+    }
+
+  }
+  template<int dim>
+  int StokesProblem<dim>::count_periodic_faces(){
+    unsigned int count=0;
+    for(auto &cell: triangulation.active_cell_iterators()){
+      if(cell -> is_locally_owned()){
+        bool neighbor_exists=false;
+        for(int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            neighbor_exists=true;
+          }
+        }
+        if(neighbor_exists){
+          ++count;
+        }
+      }
+    }
+
+    return count;
+  }
+
+  //refine twice any x
+
+  // then y between .5 and .75 
+
+  //center z<.25
+
+  //second predicate x>.25
+
+  template <int dim>
+  void StokesProblem<dim>::exchange_refinement_flags ()
+  {
+    // Communicate refinement flags on ghost cells from the owner of the
+    // cell. This is necessary to get consistent refinement, as mesh
+    // smoothing would undo some of the requested coarsening/refinement.
+
+    auto pack
+    = [] (const typename DoFHandler<dim>::active_cell_iterator &cell) -> std::uint8_t
+    {
+      if (cell->refine_flag_set())
+        return 1;
+      if (cell->coarsen_flag_set())
+        return 2;
+      return 0;
+    };
+    auto unpack
+    = [] (const typename DoFHandler<dim>::active_cell_iterator &cell, const std::uint8_t &flag) -> void
+    {
+      cell->clear_coarsen_flag();
+      cell->clear_refine_flag();
+      if (flag==1)
+        cell->set_refine_flag();
+      else if (flag==2)
+        cell->set_coarsen_flag();
+    };
+
+    GridTools::exchange_cell_data_to_ghosts<std::uint8_t, DoFHandler<dim>>
+    (dof_handler, pack, unpack);
+  }
 
 
   template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
-    Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
+    srand(std::time(nullptr));
 
-    const FEValuesExtractors::Scalar pressure(dim);
-    KellyErrorEstimator<dim>::estimate(
-      dof_handler,
-      QGauss<dim - 1>(degree + 1),
-      std::map<types::boundary_id, const Function<dim> *>(),
-      solution,
-      estimated_error_per_cell,
-      fe.component_mask(pressure));
+    const auto refinement_subdomain_predicate = [&](const auto &cell) {
+      // return (cell->center()(0) < 0.25 && cell->center()(1) > 0.75 && cell->center()(1)< 1 && cell->center()(2)<.25);
+      return (rand()%100)<10;
+    };
 
-    parallel::distributed::GridRefinement::refine_and_coarsen_fixed_number(
-      triangulation, estimated_error_per_cell, 0.3, 0.0);
+   for (auto &cell :
+       triangulation.active_cell_iterators() | refinement_subdomain_predicate){
+          cell->set_refine_flag();
+       }
+    // bool changed=false;
+  //   do{
+
+  //     triangulation.prepare_coarsening_and_refinement();
+  //     exchange_refinement_flags();
+
+  //     changed=resolve_improved();
+
+  //     changed = (Utilities::MPI::max(changed?1:0,triangulation.get_communicator())==1) ? true : false;
+      
+  //   }while(changed);
     triangulation.execute_coarsening_and_refinement();
   }
 
+// while (changed)
+// {
+//   prepare();
+//   exchange();
+//   for all of my cells, if a periodic neighbor is marked refinement, set_refine_flag() and changed=true;
+
+// };
+
+//    resolve_refine_flags_on_periodic_boundary();
+
+  
+  
 
   template <int dim>
   void StokesProblem<dim>::run()
   {
     create_mesh();
+    // std::cout<<count_periodic_faces();
 
-    for (unsigned int refinement_cycle = 0; refinement_cycle < 9;
+    for (unsigned int refinement_cycle = 2; refinement_cycle < 5;
          ++refinement_cycle)
       {
         pcout << "Refinement cycle " << refinement_cycle << std::endl;
 
-        if (refinement_cycle > 0)
-          refine_mesh();
+        refine_mesh();
 
-        setup_dofs();
-
-        pcout << "   Assembling..." << std::endl << std::flush;
-        assemble_system();
-
-        pcout << "   Solving..." << std::flush;
-        solve();
+        // setup_dofs();
 
         output_results(refinement_cycle);
 
         pcout << std::endl;
       }
+      MPI_Barrier(MPI_COMM_WORLD);
+    std::cout<<"number of level differences across periodic boundary detected is "<<verifier()<<"\n";
+
   }
 } // namespace Step45
 
@@ -783,10 +1240,17 @@ int main(int argc, char *argv[])
     {
       using namespace dealii;
       using namespace Step45;
+      
+      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 8);
+      StokesProblem<3>                 flow_problem(1);
+      
 
-      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
-      StokesProblem<2>                 flow_problem(1);
+    
+    //   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+    //   MPI_Comm_size(MPI_COMM_WORLD,&size);
+    //   printf("process %d of %d\n",rank,size);
       flow_problem.run();
+      return 0;
     }
   catch (std::exception &exc)
     {
@@ -814,6 +1278,7 @@ int main(int argc, char *argv[])
                 << std::endl;
       return 1;
     }
+    
 
   return 0;
 }
