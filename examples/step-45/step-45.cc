@@ -712,10 +712,10 @@ namespace Step45
 
     DataOut<dim> data_out;
     data_out.attach_dof_handler(dof_handler);
-    data_out.add_data_vector(solution,
-                             solution_names,
-                             DataOut<dim>::type_dof_data,
-                             data_component_interpretation);
+    // data_out.add_data_vector(solution,
+    //                          solution_names,
+    //                          DataOut<dim>::type_dof_data,
+    //                          data_component_interpretation);
     Vector<float> subdomain(triangulation.n_active_cells());
     for (unsigned int i = 0; i < subdomain.size(); ++i)
       subdomain(i) = triangulation.locally_owned_subdomain();
@@ -723,7 +723,7 @@ namespace Step45
     data_out.build_patches(mapping, degree + 1);
 
     data_out.write_vtu_with_pvtu_record(
-      "./", "solution", refinement_cycle, MPI_COMM_WORLD, 2);
+      "./", "sol", refinement_cycle, MPI_COMM_WORLD, 2);
   }
 
 
@@ -731,19 +731,14 @@ namespace Step45
   template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
-    Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
+    const auto refinement_subdomain_predicate = [&](const auto &cell) {
+      return (cell->center()(1) < 0.3);
+    };
 
-    const FEValuesExtractors::Scalar pressure(dim);
-    KellyErrorEstimator<dim>::estimate(
-      dof_handler,
-      QGauss<dim - 1>(degree + 1),
-      std::map<types::boundary_id, const Function<dim> *>(),
-      solution,
-      estimated_error_per_cell,
-      fe.component_mask(pressure));
-
-    parallel::distributed::GridRefinement::refine_and_coarsen_fixed_number(
-      triangulation, estimated_error_per_cell, 0.3, 0.0);
+   for (auto &cell :
+       triangulation.active_cell_iterators() | refinement_subdomain_predicate){
+      cell->set_refine_flag();
+    }
     triangulation.execute_coarsening_and_refinement();
   }
 
@@ -752,8 +747,9 @@ namespace Step45
   void StokesProblem<dim>::run()
   {
     create_mesh();
+    output_results(0);
 
-    for (unsigned int refinement_cycle = 0; refinement_cycle < 9;
+    for (unsigned int refinement_cycle = 1; refinement_cycle < 2;
          ++refinement_cycle)
       {
         pcout << "Refinement cycle " << refinement_cycle << std::endl;
@@ -761,13 +757,13 @@ namespace Step45
         if (refinement_cycle > 0)
           refine_mesh();
 
-        setup_dofs();
+        // setup_dofs();
 
-        pcout << "   Assembling..." << std::endl << std::flush;
-        assemble_system();
+        // pcout << "   Assembling..." << std::endl << std::flush;
+        // assemble_system();
 
-        pcout << "   Solving..." << std::flush;
-        solve();
+        // pcout << "   Solving..." << std::flush;
+        // solve();
 
         output_results(refinement_cycle);
 
@@ -784,7 +780,7 @@ int main(int argc, char *argv[])
       using namespace dealii;
       using namespace Step45;
 
-      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
+      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 2);
       StokesProblem<2>                 flow_problem(1);
       flow_problem.run();
     }
