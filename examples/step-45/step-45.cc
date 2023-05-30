@@ -720,7 +720,7 @@ namespace Step45
     for (unsigned int i = 0; i < subdomain.size(); ++i)
       subdomain(i) = triangulation.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
-    data_out.build_patches(mapping, degree + 1);
+    data_out.build_patches(mapping,0);
 
     data_out.write_vtu_with_pvtu_record(
       "./", "sol", refinement_cycle, MPI_COMM_WORLD, 2);
@@ -738,7 +738,21 @@ namespace Step45
    for (auto &cell :
        triangulation.active_cell_iterators() | refinement_subdomain_predicate){
       cell->set_refine_flag();
+
     }
+    for (auto &cell :
+       triangulation.active_cell_iterators() | refinement_subdomain_predicate){
+      if(cell->at_boundary()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            
+            TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
+            neighbor->set_refine_flag();
+          }
+        }
+      }
+    }
+
     triangulation.execute_coarsening_and_refinement();
   }
 
