@@ -84,6 +84,8 @@ namespace Step45
     void output_results(const unsigned int refinement_cycle) const;
     void refine_mesh();
     void resolve_hanging_on_periodic_boundary();
+    void resolve_refine_flags_on_periodic_boundary();
+
 
     const unsigned int degree;
 
@@ -352,6 +354,13 @@ namespace Step45
     triangulation.add_periodicity(periodicity_vector);
 
     triangulation.refine_global(4 - dim);
+
+    //output_results(0);
+
+    resolve_hanging_on_periodic_boundary();
+
+    output_results(0);
+
   }
 
 
@@ -751,6 +760,21 @@ namespace Step45
     
   }
 
+  template<int dim>
+  void StokesProblem<dim>::resolve_refine_flags_on_periodic_boundary(){
+     for (auto &cell : triangulation.active_cell_iterators()) {
+       if(cell->at_boundary()){
+         for(unsigned int i=0;i<cell->n_faces();++i){
+           if(cell->has_periodic_neighbor(i)){
+
+             TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
+             neighbor->set_refine_flag();
+           }
+         }
+       }
+     }
+  }
+
   template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
@@ -763,23 +787,10 @@ namespace Step45
       cell->set_refine_flag();
 
     }
-    // for (auto &cell :
-    //    triangulation.active_cell_iterators() | refinement_subdomain_predicate){
-    //   if(cell->at_boundary()){
-    //     for(unsigned int i=0;i<cell->n_faces();++i){
-    //       if(cell->has_periodic_neighbor(i)){
-            
-    //         TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
-    //         neighbor->set_refine_flag();
-    //       }
-    //     }
-    //   }
-    // }
 
-    triangulation.execute_coarsening_and_refinement();
-    // StokesProblem<dim>::resolve_hanging_on_periodic_boundary();
-    
+   resolve_refine_flags_on_periodic_boundary();
 
+   triangulation.execute_coarsening_and_refinement();
   }
   
 
@@ -787,23 +798,15 @@ namespace Step45
   void StokesProblem<dim>::run()
   {
     create_mesh();
-    output_results(0);
 
     for (unsigned int refinement_cycle = 1; refinement_cycle < 3;
          ++refinement_cycle)
       {
         pcout << "Refinement cycle " << refinement_cycle << std::endl;
 
-        if (refinement_cycle > 0)
-          refine_mesh();
+        refine_mesh();
 
         setup_dofs();
-
-        // pcout << "   Assembling..." << std::endl << std::flush;
-        // assemble_system();
-
-        // pcout << "   Solving..." << std::flush;
-        // solve();
 
         output_results(refinement_cycle);
 
