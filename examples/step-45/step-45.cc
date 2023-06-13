@@ -355,11 +355,23 @@ namespace Step45
 
     triangulation.refine_global(4 - dim);
 
-    //output_results(0);
+    const auto refinement_subdomain_predicate = [&](const auto &cell) {
+      return (cell->center()(1) > 0.7);
+    };
+
+    for (auto &cell :
+         triangulation.active_cell_iterators() | refinement_subdomain_predicate){
+        cell->set_refine_flag();
+
+      }
+
+    triangulation.execute_coarsening_and_refinement();
+
+    output_results(0);
 
     resolve_hanging_on_periodic_boundary();
 
-    output_results(0);
+    output_results(1);
 
   }
 
