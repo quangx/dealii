@@ -756,12 +756,14 @@ namespace Step45
       cell->clear_refine_flag();
     }
     for(auto &cell: triangulation.active_cell_iterators()){
-      if(cell->at_boundary()){
+      if(cell->is_locally_owned() && cell->at_boundary()){
         for(unsigned int i=0;i<cell->n_faces();++i){
-          if(cell->has_periodic_neighbor(i)){
+          if(cell->has_periodic_neighbor(i) ){
             if(cell->periodic_neighbor_is_coarser(i)){
               TriaIterator<CellAccessor<dim,dim>> neighbor=cell->periodic_neighbor(i);
-              neighbor->set_refine_flag();
+              if(neighbor->is_active()){
+                neighbor->set_refine_flag();
+              }
             }
           }
         }
@@ -775,10 +777,11 @@ namespace Step45
   template<int dim>
   void StokesProblem<dim>::resolve_refine_flags_on_periodic_boundary(){
      for (auto &cell : triangulation.active_cell_iterators()) {
-       if(cell->at_boundary()){
+       if(cell->is_locally_owned() && 
+       cell->refinement_case()!=RefinementCase<dim>::no_refinement&& cell->at_boundary()){
          for(unsigned int i=0;i<cell->n_faces();++i){
            if(cell->has_periodic_neighbor(i)){
-
+              
              TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
              neighbor->set_refine_flag();
            }
