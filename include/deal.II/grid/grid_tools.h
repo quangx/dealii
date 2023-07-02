@@ -3843,8 +3843,6 @@ namespace GridTools
 
 } /*namespace GridTools*/
 
-
-
 /* ----------------- Template function --------------- */
 
 #ifndef DOXYGEN
