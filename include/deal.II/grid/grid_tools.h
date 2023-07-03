@@ -538,6 +538,7 @@ namespace GridTools
    * @ref reordering "reordering module".
    *
    * @param cells The array of CellData objects that describe the mesh's topology.
+   * @ingroup reordering
    */
   template <int dim>
   void
@@ -3016,6 +3017,8 @@ namespace GridTools
    * Data type that provides all information necessary to create periodicity
    * constraints and a periodic p4est forest with respect to two 'periodic'
    * cell faces.
+   *
+   * @ingroup reordering
    */
   template <typename CellIterator>
   struct PeriodicFacePair
