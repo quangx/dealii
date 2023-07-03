@@ -40,6 +40,7 @@
 // @cond SKIP
 #include <deal.II/base/conditional_ostream.h>
 
+#include <deal.II/base/geometry_info.h>
 #include <deal.II/distributed/grid_refinement.h>
 
 #include <deal.II/lac/solver_cg.h>
@@ -64,6 +65,7 @@
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
+#include <mpi.h>
 
 namespace Step45
 {
@@ -362,16 +364,17 @@ namespace Step45
     for (auto &cell :
          triangulation.active_cell_iterators() | refinement_subdomain_predicate){
         cell->set_refine_flag();
-
+       
       }
 
     triangulation.execute_coarsening_and_refinement();
 
-    output_results(0);
+    // output_results(0);
 
     resolve_hanging_on_periodic_boundary();
+    
 
-    output_results(1);
+    output_results(0);
 
   }
 
@@ -740,9 +743,9 @@ namespace Step45
     //                          data_component_interpretation);
     Vector<float> subdomain(triangulation.n_active_cells());
     for (unsigned int i = 0; i < subdomain.size(); ++i)
-      subdomain(i) =8;
+      subdomain(i) = triangulation.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
-    data_out.build_patches(mapping,0);
+    data_out.build_patches(mapping, degree + 1);
 
     data_out.write_vtu_with_pvtu_record(
       "./", "sol", refinement_cycle, MPI_COMM_WORLD, 2);
@@ -751,6 +754,7 @@ namespace Step45
   template<int dim>
   void StokesProblem<dim>::resolve_hanging_on_periodic_boundary(){
     // output_results(1);
+    int count=0;
 
     for(auto& cell: triangulation.active_cell_iterators()){
       cell->clear_refine_flag();
@@ -763,6 +767,7 @@ namespace Step45
               TriaIterator<CellAccessor<dim,dim>> neighbor=cell->periodic_neighbor(i);
               if(neighbor->is_active()){
                 neighbor->set_refine_flag();
+                ++count;
               }
             }
           }
@@ -770,24 +775,27 @@ namespace Step45
       }
     }
     triangulation.execute_coarsening_and_refinement();
-    // output_results(2);
     
   }
 
   template<int dim>
   void StokesProblem<dim>::resolve_refine_flags_on_periodic_boundary(){
      for (auto &cell : triangulation.active_cell_iterators()) {
-       if(cell->is_locally_owned() && 
-       cell->refinement_case()!=RefinementCase<dim>::no_refinement&& cell->at_boundary()){
+        
+       if(cell->is_locally_owned()  && cell->refine_flag_set()){
          for(unsigned int i=0;i<cell->n_faces();++i){
            if(cell->has_periodic_neighbor(i)){
               
              TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
-             neighbor->set_refine_flag();
+             if(neighbor->is_active()){
+              neighbor->set_refine_flag();
+             }
            }
          }
        }
+       
      }
+
   }
 
   template <int dim>
@@ -800,6 +808,10 @@ namespace Step45
    for (auto &cell :
        triangulation.active_cell_iterators() | refinement_subdomain_predicate){
       cell->set_refine_flag();
+       
+       
+
+
 
     }
 
@@ -837,10 +849,17 @@ int main(int argc, char *argv[])
     {
       using namespace dealii;
       using namespace Step45;
-
-      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 2);
+      
+      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 8);
       StokesProblem<2>                 flow_problem(1);
+      
+
+    
+    //   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+    //   MPI_Comm_size(MPI_COMM_WORLD,&size);
+    //   printf("process %d of %d\n",rank,size);
       flow_problem.run();
+      return 0;
     }
   catch (std::exception &exc)
     {
