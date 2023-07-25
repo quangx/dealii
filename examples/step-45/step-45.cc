@@ -87,6 +87,7 @@ namespace Step45
     void refine_mesh();
     void resolve_hanging_on_periodic_boundary();
     void resolve_refine_flags_on_periodic_boundary();
+    int count_periodic_faces();
 
 
     const unsigned int degree;
@@ -130,7 +131,7 @@ namespace Step45
                               Vector<double> &  value) const override;
   };
 
-
+  
   template <int dim>
   double BoundaryValues<dim>::value(const Point<dim> & /*p*/,
                                     const unsigned int component) const
@@ -368,13 +369,15 @@ namespace Step45
       }
 
     triangulation.execute_coarsening_and_refinement();
+    //  triangulation.add_periodicity(periodicity_vector);
 
-    // output_results(0);
+
+    output_results(0);
 
     resolve_hanging_on_periodic_boundary();
     
 
-    output_results(0);
+    output_results(1);
 
   }
 
@@ -745,35 +748,123 @@ namespace Step45
     for (unsigned int i = 0; i < subdomain.size(); ++i)
       subdomain(i) = triangulation.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
-    data_out.build_patches(mapping, degree + 1);
+    data_out.build_patches();
 
     data_out.write_vtu_with_pvtu_record(
       "./", "sol", refinement_cycle, MPI_COMM_WORLD, 2);
   }
 
+  
+
   template<int dim>
   void StokesProblem<dim>::resolve_hanging_on_periodic_boundary(){
     // output_results(1);
-    int count=0;
-
+    std::vector<CellId> list;
+    
+    int local_count=0;
+    int* recvcounts;
     for(auto& cell: triangulation.active_cell_iterators()){
-      cell->clear_refine_flag();
+      if(cell->is_locally_owned()){
+        cell->clear_refine_flag();
+
+      }
     }
-    for(auto &cell: triangulation.active_cell_iterators()){
+    
+    for(auto& cell: triangulation.active_cell_iterators()){
       if(cell->is_locally_owned() && cell->at_boundary()){
         for(unsigned int i=0;i<cell->n_faces();++i){
-          if(cell->has_periodic_neighbor(i) ){
-            if(cell->periodic_neighbor_is_coarser(i)){
-              TriaIterator<CellAccessor<dim,dim>> neighbor=cell->periodic_neighbor(i);
-              if(neighbor->is_active()){
-                neighbor->set_refine_flag();
-                ++count;
-              }
+          if(cell-> has_periodic_neighbor(i)){
+            if(cell-> periodic_neighbor_is_coarser(i)){
+              list.push_back(cell->periodic_neighbor(i)->id());
+              local_count++;
             }
           }
         }
       }
     }
+    MPI_Barrier(MPI_COMM_WORLD);
+    // int* convert_list;
+    // for(unsigned int i=0;i<list.size();++i){
+    //   std::array<unsigned int,4> temp=list[i].to_binary<dim>();
+    //   for(unsigned int j=0;j<sizeof(temp);++j){
+    //     convert_list[i]=temp[j];
+    //   }
+
+    // }
+    
+    int ranks; //number of ranks
+
+    MPI_Comm_size(MPI_COMM_WORLD,&ranks);
+
+    std::cout<<"number of ranks"<<ranks;
+
+    int* temp_revcounts;
+    int root;
+    int stride=5;
+    int *displs;
+    displs=(int* )malloc(ranks*stride*sizeof(int));
+    temp_revcounts=(int*)malloc(ranks*sizeof(int));
+    for(int i=0;i<ranks;++i){
+      displs[i]=i*stride;
+
+    }
+    for(int i=0;i<ranks;++i){
+      temp_revcounts[i]=1;
+    }
+
+
+    recvcounts=(int*)malloc(ranks*sizeof(int)); //will be used to gather cell ids
+
+
+    MPI_Gatherv(&local_count,1,MPI_INT,recvcounts,temp_revcounts,
+    displs,MPI_INT,root,MPI_COMM_WORLD);  //this command assigns an array of counts to recvcounts
+    int comm_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank);
+    if(comm_rank==0){
+      for(int i=0;i<ranks;++i){
+        std::cout<<recvcounts[i];
+      }
+    }
+
+    int* global_list; //list of all cell ids. int size*number of periodic cells*4 by how cell ids aare defined
+    // MPI_Allgatherv(&global_list,list.size(),MPI_INT,convert_list
+    // );
+    // for(auto&cell: triangulation.active_cell_iterators()){
+    //   if(cell->is_locally_owned()){
+    //     for(int i=0;i<list.size();++i){
+    //       if(cell->id()==list[i]){
+
+    //         cell->set_refine_flag();
+    //       }
+    //     }
+    //   }
+    // }
+    // for(auto &cell: triangulation.active_cell_iterators()){
+      // if(cell->is_locally_owned() && cell->at_boundary()){
+      //   for(unsigned int i=0;i<cell->n_faces();++i){
+      //     if(cell->has_periodic_neighbor(i) ){
+      //       if(cell->periodic_neighbor_is_coarser(i)){
+      //         TriaIterator<CellAccessor<dim,dim>> neighbor=cell->periodic_neighbor(i);
+      //         if(neighbor->is_active()){
+      //           neighbor->set_refine_flag();
+      //           if(neighbor->refine_flag_set())
+      //             std::cout<<"mark";
+      //         }
+      //       }
+      //     }
+      //   }
+      // }
+      // if(cell->is_locally_owned() && cell->at_boundary()){
+      //   for(unsigned int i=0;i<cell->n_faces();++i){
+      //     if(cell->has_periodic_neighbor(i)){
+      //       if(cell->periodic_neighbor(i)->has_children()){
+      //         cell->set_refine_flag();
+      //       }
+      //     }
+      //   }
+      // }
+    
+  
     triangulation.execute_coarsening_and_refinement();
     
   }
@@ -797,10 +888,32 @@ namespace Step45
      }
 
   }
+  template<int dim>
+  int StokesProblem<dim>::count_periodic_faces(){
+    unsigned int count=0;
+    for(auto &cell: triangulation.active_cell_iterators()){
+      if(cell -> is_locally_owned()){
+        bool neighbor_exists=false;
+        for(int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            neighbor_exists=true;
+          }
+        }
+        if(neighbor_exists){
+          ++count;
+        }
+      }
+    }
+    int global_count=0;
+    MPI_Reduce(&count,&global_count,1,MPI_INT,MPI_SUM,0,MPI_COMM_WORLD);
+
+    return global_count;
+  }
 
   template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
+
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
       return (cell->center()(1) < 0.3);
     };
@@ -825,8 +938,9 @@ namespace Step45
   void StokesProblem<dim>::run()
   {
     create_mesh();
+    // std::cout<<count_periodic_faces();
 
-    for (unsigned int refinement_cycle = 1; refinement_cycle < 3;
+    for (unsigned int refinement_cycle = 2; refinement_cycle < 3;
          ++refinement_cycle)
       {
         pcout << "Refinement cycle " << refinement_cycle << std::endl;
