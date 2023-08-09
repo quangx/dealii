@@ -3194,10 +3194,13 @@ MGTwoLevelTransferBase<LinearAlgebra::distributed::Vector<Number>>::
            this->partitioner_coarse.get(),
          ExcInternalError());
 
+  const bool src_ghosts_have_been_set = src.has_ghost_elements();
+
   if (use_src_inplace == false)
     this->vec_coarse.copy_locally_owned_data_from(src);
 
-  this->update_ghost_values(*vec_coarse_ptr);
+  if ((use_src_inplace == false) || (src_ghosts_have_been_set == false))
+    this->update_ghost_values(*vec_coarse_ptr);
 
   if (use_dst_inplace == false)
     *vec_fine_ptr = Number(0.);
@@ -3210,7 +3213,7 @@ MGTwoLevelTransferBase<LinearAlgebra::distributed::Vector<Number>>::
   if (use_dst_inplace == false)
     dst += this->vec_fine;
 
-  if (use_src_inplace)
+  if (use_src_inplace && (src_ghosts_have_been_set == false))
     this->zero_out_ghost_values(*vec_coarse_ptr);
 }
 
@@ -3361,10 +3364,13 @@ MGTwoLevelTransferBase<LinearAlgebra::distributed::Vector<Number>>::
            this->partitioner_coarse.get(),
          ExcInternalError());
 
+  const bool src_ghosts_have_been_set = src.has_ghost_elements();
+
   if (use_src_inplace == false)
     this->vec_fine.copy_locally_owned_data_from(src);
 
-  if (fine_element_is_continuous || use_src_inplace == false)
+  if ((use_src_inplace == false) ||
+      (fine_element_is_continuous && (src_ghosts_have_been_set == false)))
     this->update_ghost_values(*vec_fine_ptr);
 
   if (use_dst_inplace == false)
@@ -3381,7 +3387,7 @@ MGTwoLevelTransferBase<LinearAlgebra::distributed::Vector<Number>>::
     this->zero_out_ghost_values(*vec_fine_ptr); // internal vector (DG)
   else if (fine_element_is_continuous && use_src_inplace == false)
     vec_fine_ptr->set_ghost_state(false); // internal vector (CG)
-  else if (fine_element_is_continuous)
+  else if (fine_element_is_continuous && (src_ghosts_have_been_set == false))
     this->zero_out_ghost_values(*vec_fine_ptr); // external vector
 
   this->compress(*vec_coarse_ptr, VectorOperation::add);
@@ -3540,10 +3546,13 @@ MGTwoLevelTransfer<dim, LinearAlgebra::distributed::Vector<Number>>::
            this->partitioner_coarse.get(),
          ExcInternalError());
 
+  const bool src_ghosts_have_been_set = src.has_ghost_elements();
+
   if (use_src_inplace == false)
     this->vec_fine.copy_locally_owned_data_from(src);
 
-  if (this->fine_element_is_continuous || use_src_inplace == false)
+  if ((use_src_inplace == false) ||
+      (this->fine_element_is_continuous && (src_ghosts_have_been_set == false)))
     this->update_ghost_values(*vec_fine_ptr);
 
   *vec_coarse_ptr = 0.0;
@@ -3638,7 +3647,8 @@ MGTwoLevelTransfer<dim, LinearAlgebra::distributed::Vector<Number>>::
   // clean up related to update_ghost_values()
   if (use_src_inplace == false)
     vec_fine_ptr->set_ghost_state(false); // internal vector
-  else if (this->fine_element_is_continuous)
+  else if (this->fine_element_is_continuous &&
+           (src_ghosts_have_been_set == false))
     this->zero_out_ghost_values(*vec_fine_ptr); // external vector
 
   if (use_dst_inplace == false)
