@@ -315,8 +315,12 @@ namespace Step45
     const double inner_radius = .5;
     const double outer_radius = 1.;
 
-    GridGenerator::quarter_hyper_shell(
-      triangulation, center, inner_radius, outer_radius, 0, true);
+    // GridGenerator::quarter_hyper_shell(
+    //   triangulation, center, inner_radius, outer_radius, 0, true);
+    GridGenerator::hyper_cube(triangulation,0,1,true);
+    
+    
+
 
     // Before we can prescribe periodicity constraints, we need to ensure that
     // cells on opposite sides of the domain but connected by periodic faces are
@@ -343,24 +347,23 @@ namespace Step45
     FullMatrix<double> rotation_matrix(dim);
     rotation_matrix[0][1] = 1.;
     rotation_matrix[1][0] = -1.;
-
+    
     GridTools::collect_periodic_faces(triangulation,
                                       2,
                                       3,
                                       1,
-                                      periodicity_vector,
-                                      Tensor<1, dim>(),
-                                      rotation_matrix);
+                                      periodicity_vector
+                                      );
 
     // Now telling the triangulation about the desired periodicity is
     // particularly easy by just calling
     // parallel::distributed::Triangulation::add_periodicity.
     triangulation.add_periodicity(periodicity_vector);
 
-    triangulation.refine_global(4 - dim);
-
+    triangulation.refine_global(2);
+    output_results(0);
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
-      return (cell->center()(1) > 0.7);
+      return (cell->center()(1) > 0.5 && cell->center()(1)<.75 && cell->center()(2)<.25);
     };
 
     for (auto &cell :
@@ -373,7 +376,6 @@ namespace Step45
     //  triangulation.add_periodicity(periodicity_vector);
 
 
-    output_results(0);
 
     resolve_hanging_on_periodic_boundary();
     triangulation.execute_coarsening_and_refinement();
@@ -467,6 +469,8 @@ namespace Step45
         periodicity_vector;
 
       const unsigned int direction = 1;
+
+      std::cout<<"here";
 
       GridTools::collect_periodic_faces(dof_handler,
                                         2,
@@ -1035,12 +1039,20 @@ namespace Step45
     return count;
   }
 
+  //refine twice any x
+
+  // then y between .5 and .75 
+
+  //center z<.25
+
+  //second predicate x>.25
+
   template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
 
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
-      return (cell->center()(1) < 0.3);
+      return (cell->center()(0) < 0.25 && cell->center()(1) > 0.5 && cell->center()(1)<.75 && cell->center()(2)<.25);
     };
 
    for (auto &cell :
@@ -1065,14 +1077,14 @@ namespace Step45
     create_mesh();
     // std::cout<<count_periodic_faces();
 
-    for (unsigned int refinement_cycle = 2; refinement_cycle < 3;
+    for (unsigned int refinement_cycle = 2; refinement_cycle < 4;
          ++refinement_cycle)
       {
         pcout << "Refinement cycle " << refinement_cycle << std::endl;
 
         refine_mesh();
 
-        setup_dofs();
+        // setup_dofs();
 
         output_results(refinement_cycle);
 
@@ -1090,7 +1102,7 @@ int main(int argc, char *argv[])
       using namespace Step45;
       
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 8);
-      StokesProblem<2>                 flow_problem(1);
+      StokesProblem<3>                 flow_problem(1);
       
 
     
