@@ -2738,10 +2738,289 @@ namespace parallel
     } // namespace
 
 
+  template<int dim>
+  count_periodic_faces(){
+    unsigned int count=0;
+    for(auto &cell: triangulation.active_cell_iterators()){
+      if(cell -> is_locally_owned()){
+        bool neighbor_exists=false;
+        for(int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            neighbor_exists=true;
+          }
+        }
+        if(neighbor_exists){
+          ++count;
+        }
+      }
+    }
+
+    return count;
+  }
+
+    template<int dim>
+  void resolve_hanging_on_periodic_boundary(){
+    // output_results(1);
+    std::vector<CellId> list;
+    std::vector<CellId> local_boundary_cells;
+    int local_count=0;
+    // int* local_count=(int*)malloc (sizeof(int));
+    // local_count[0]=0;
+    int* recvcounts;
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()){
+        cell->clear_refine_flag();
+
+      }
+    }
+    
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned() && cell->at_boundary()){
+        local_boundary_cells.push_back(cell->id());
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell-> has_periodic_neighbor(i)){
+            if(cell-> periodic_neighbor_is_coarser(i)){
+              list.push_back(cell->periodic_neighbor(i)->id());
+              ++local_count;
+            }
+          }
+        }
+      }
+    }
+    std::cout<<"local count is "<<local_count<<"\n";
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    int* convert_list=(int*)malloc(sizeof(unsigned int)*list.size()*4);
+    for(unsigned int i=0;i<list.size();++i){
+      std::array<unsigned int,4> temp=list[i].to_binary<dim>();
+      // std::cout<<MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank)<<":";
+      for(unsigned int j=0;j<4;++j){
+        convert_list[4*i+j]= temp[j];
+        std::cout<<convert_list[4*i+j]<<" ";
+      }
+      std::cout<<"\n";
+
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    int ranks; //number of ranks
+
+    MPI_Comm_size(MPI_COMM_WORLD,&ranks);
+    int comm_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank);
+
+    if(comm_rank==0)
+      std::cout<<"number of ranks"<<ranks<<"\n";
+
+    
+    int count=count_periodic_faces();
+    int global_count;
+    int my_id;
+    MPI_Comm_rank(MPI_COMM_WORLD,&my_id);
+    MPI_Reduce(&count,&global_count,1,MPI_INT,MPI_SUM,0,MPI_COMM_WORLD);
+    MPI_Bcast(&global_count,1,MPI_INT,0,MPI_COMM_WORLD);
+    int stride=2; //create formula for value
+    std::cout<<"stride is "<<stride;
+    int *displs;
+    displs=(int* )malloc(ranks*sizeof(int));
+    for(int i=0;i<ranks;++i){
+      displs[i]=i*stride;
+
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+  
+    int* global_list=(int* )malloc(global_count*sizeof(int)*8);
+
+    recvcounts=(int*)malloc(ranks*sizeof(int)); //will be used to gather cell ids
+    local_count=local_count*4;
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Allgather(&local_count,1,MPI_INT,recvcounts,1,MPI_INT,MPI_COMM_WORLD);
+    displs[0]=0;
+    for(int i=1;i<ranks;++i){
+      displs[i]=displs[i-1]+recvcounts[i-1];
+    }
+    std::cout<<"numbmer of periodic faces is "<<global_count<<"\n";
+    if(comm_rank==0){
+      for(int i=0;i<ranks;++i){
+        std::cout<<"displs["<<i<<"]="<<displs[i]<<"\n";
+      }
+    }
+    std::cout<<"\n list size is "<<list.size();
+    MPI_Barrier(MPI_COMM_WORLD);
+ 
+
+    std::cout<<"convert_list: \n";
+
+    for(int i=0;i<list.size()*4;++i){
+      std::cout<<convert_list[i]<<" ";
+    }
+    MPI_Allgatherv(convert_list,list.size()*4,MPI_INT,global_list,recvcounts,displs,MPI_INT,MPI_COMM_WORLD); 
+  
+      int sum_recvcounts=0;               //fix indentation
+      for(int i=0;i<ranks;++i){
+        sum_recvcounts+=recvcounts[i];
+
+      }
+      std::cout<<"\n sum_recvcounts is "<<sum_recvcounts;
+      std::cout<<"CELL IDS BELOW  \n";
+      for(int i=0;i<sum_recvcounts;++i){
+        std::cout<<global_list[i]<<" ";
+        
+      }
+    
+    std::vector<CellId> ids;
+    for(int i=0;i<sum_recvcounts/4;++i){
+      std::array<unsigned int,4> temp;
+      for(int j=0;j<4;++j){
+        temp[j]=global_list[4*i+j];
+      }
+      CellId tempid=CellId(temp);
+      ids.push_back(tempid);
+    }
+    for(int i=0;i<ids.size();++i){
+      for(int j=0;j<local_boundary_cells.size();++j){
+        if (ids[i]==local_boundary_cells[j]){
+          triangulation.create_cell_iterator(ids[i])->set_refine_flag();
+        }
+      }
+    }
+    
+    
+   
+   
+      
+  }
+
+
+  template<int dim>
+  void resolve_refine_flags_on_periodic_boundary(){
+      int local_count=0;
+      std::vector<CellId> list;
+      std::vector<CellId> local_boundary_cells;
+      for(auto& cell: triangulation.active_cell_iterators()){
+        if(cell->is_locally_owned() && cell->at_boundary()){
+          local_boundary_cells.push_back(cell->id());
+        }
+      }
+      for (auto &cell : triangulation.active_cell_iterators()) {
+        
+       if(cell->is_locally_owned()  && cell->refine_flag_set()){
+         for(unsigned int i=0;i<cell->n_faces();++i){
+           if(cell->has_periodic_neighbor(i)){
+              
+             TriaIterator< CellAccessor< dim,dim > >  neighbor=cell->periodic_neighbor(i);
+             if(neighbor->is_active()){
+              list.push_back(neighbor->id());
+              ++local_count;
+             }
+           }
+         }
+       }
+       
+     }
+
+      int* convert_list=(int*)malloc(sizeof(unsigned int)*list.size()*4);
+      for(unsigned int i=0;i<list.size();++i){
+      std::array<unsigned int,4> temp=list[i].to_binary<dim>();
+      for(unsigned int j=0;j<4;++j){
+        convert_list[4*i+j]= temp[j];
+        std::cout<<convert_list[4*i+j]<<" ";
+      }
+      std::cout<<"\n";
+
+    }
+
+     
+      int ranks; //number of ranks
+
+    MPI_Comm_size(MPI_COMM_WORLD,&ranks);
+    int comm_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD,&comm_rank);
+
+    if(comm_rank==0)
+      std::cout<<"number of ranks"<<ranks<<"\n";
+
+    
+    int count=count_periodic_faces();
+    int global_count;
+    int my_id;
+    MPI_Comm_rank(MPI_COMM_WORLD,&my_id);
+    MPI_Reduce(&count,&global_count,1,MPI_INT,MPI_SUM,0,MPI_COMM_WORLD);
+    MPI_Bcast(&global_count,1,MPI_INT,0,MPI_COMM_WORLD);
+    int stride=2; //create formula for value
+    std::cout<<"stride is "<<stride;
+    int *displs;
+    displs=(int* )malloc(ranks*sizeof(int));
+    for(int i=0;i<ranks;++i){
+      displs[i]=i*stride;
+
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+  
+    int* global_list=(int* )malloc(global_count*sizeof(int)*8);
+
+    int* recvcounts=(int*)malloc(ranks*sizeof(int)); //will be used to gather cell ids
+    local_count=local_count*4;
+    MPI_Barrier(MPI_COMM_WORLD);
+   MPI_Allgather(&local_count,1,MPI_INT,recvcounts,1,MPI_INT,MPI_COMM_WORLD);
+
+    MPI_Allgather(&local_count,1,MPI_INT,recvcounts,1,MPI_INT,MPI_COMM_WORLD);
+    displs[0]=0;
+    for(int i=1;i<ranks;++i){
+      displs[i]=displs[i-1]+recvcounts[i-1];
+    }
+    std::cout<<"numbmer of periodic faces is "<<global_count<<"\n";
+    if(comm_rank==0){
+      for(int i=0;i<ranks;++i){
+        std::cout<<"displs["<<i<<"]="<<displs[i]<<"\n";
+      }
+    }
+    std::cout<<"\n list size is "<<list.size();
+    MPI_Barrier(MPI_COMM_WORLD);
+ 
+
+    std::cout<<"convert_list: \n";
+
+    for(int i=0;i<list.size()*4;++i){
+      std::cout<<convert_list[i]<<" ";
+    }
+    MPI_Allgatherv(convert_list,list.size()*4,MPI_INT,global_list,recvcounts,displs,MPI_INT,MPI_COMM_WORLD); 
+  
+      int sum_recvcounts=0;               //fix indentation
+      for(int i=0;i<ranks;++i){
+        sum_recvcounts+=recvcounts[i];
+
+      }
+      std::cout<<"\n sum_recvcounts is "<<sum_recvcounts;
+      std::cout<<"CELL IDS BELOW  \n";
+      for(int i=0;i<sum_recvcounts;++i){
+        std::cout<<global_list[i]<<" ";
+        
+      }
+    
+    std::vector<CellId> ids;
+    for(int i=0;i<sum_recvcounts/4;++i){
+      std::array<unsigned int,4> temp;
+      for(int j=0;j<4;++j){
+        temp[j]=global_list[4*i+j];
+      }
+      CellId tempid=CellId(temp);
+      ids.push_back(tempid);
+    }
+    for(int i=0;i<ids.size();++i){
+      for(int j=0;j<local_boundary_cells.size();++j){
+        if (ids[i]==local_boundary_cells[j]){
+          triangulation.create_cell_iterator(ids[i])->set_refine_flag();
+        }
+      }
+    }
+
+  }
+  
 
     template <int dim, int spacedim>
     DEAL_II_CXX20_REQUIRES((concepts::is_valid_dim_spacedim<dim, spacedim>))
-    bool Triangulation<dim, spacedim>::prepare_coarsening_and_refinement()
+    bool Triangulation<dim, spacedim>::prepare_coarsening_and_`refinement()
     {
       bool         mesh_changed = false;
       unsigned int loop_counter = 0;

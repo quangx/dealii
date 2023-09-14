@@ -81,6 +81,8 @@ namespace Step45
 
   private:
     void create_mesh();
+    bool resolve_improved();
+    bool resolve_improved_2();
     void setup_dofs();
     void assemble_system();
     void solve();
@@ -88,6 +90,7 @@ namespace Step45
     void refine_mesh();
     void resolve_hanging_on_periodic_boundary();
     void resolve_refine_flags_on_periodic_boundary();
+    void exchange_refinement_flags();
     int count_periodic_faces();
 
 
@@ -372,12 +375,11 @@ namespace Step45
        
       }
 
-    triangulation.execute_coarsening_and_refinement();
     //  triangulation.add_periodicity(periodicity_vector);
 
 
 
-    resolve_hanging_on_periodic_boundary();
+    // resolve_hanging_on_periodic_boundary();
     triangulation.execute_coarsening_and_refinement();
     
 
@@ -896,6 +898,43 @@ namespace Step45
   }
 
   template<int dim>
+  bool StokesProblem<dim>::resolve_improved(){
+    bool flags_set=false;
+    exchange_refinement_flags();
+    for(auto &cell:triangulation.active_cell_iterators()){
+      if(cell->at_boundary() && cell->refine_flag_set()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            TriaIterator<CellAccessor<dim,dim>> temp=cell->periodic_neighbor(i);
+            if(temp->is_active()&&!temp->refine_flag_set()){
+              temp->set_refine_flag();
+              flags_set=true;
+            }
+          }
+         
+        }
+      }
+    }
+    exchange_refinement_flags();
+    return flags_set;
+  }
+  template<int dim>
+  bool StokesProblem<dim>::resolve_improved_2(){
+    bool flags_set=false;
+    for(auto &cell:triangulation.active_cell_iterators()){
+      if(cell->at_boundary()){
+        for(int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i) && cell->periodic_neighbor(i)->refine_flag_set()){
+            cell->set_refine_flag();
+            flags_set=true;
+          }
+        }
+      }
+    }
+    return flags_set;
+  }
+
+  template<int dim>
   void StokesProblem<dim>::resolve_refine_flags_on_periodic_boundary(){
       int local_count=0;
       std::vector<CellId> list;
@@ -1048,27 +1087,73 @@ namespace Step45
   //second predicate x>.25
 
   template <int dim>
+  void StokesProblem<dim>::exchange_refinement_flags ()
+  {
+    // Communicate refinement flags on ghost cells from the owner of the
+    // cell. This is necessary to get consistent refinement, as mesh
+    // smoothing would undo some of the requested coarsening/refinement.
+
+    auto pack
+    = [] (const typename DoFHandler<dim>::active_cell_iterator &cell) -> std::uint8_t
+    {
+      if (cell->refine_flag_set())
+        return 1;
+      if (cell->coarsen_flag_set())
+        return 2;
+      return 0;
+    };
+    auto unpack
+    = [] (const typename DoFHandler<dim>::active_cell_iterator &cell, const std::uint8_t &flag) -> void
+    {
+      cell->clear_coarsen_flag();
+      cell->clear_refine_flag();
+      if (flag==1)
+        cell->set_refine_flag();
+      else if (flag==2)
+        cell->set_coarsen_flag();
+    };
+
+    GridTools::exchange_cell_data_to_ghosts<std::uint8_t, DoFHandler<dim>>
+    (dof_handler, pack, unpack);
+  }
+
+int count=0;
+
+  template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
 
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
-      return (cell->center()(0) < 0.25 && cell->center()(1) > 0.5 && cell->center()(1)<.75 && cell->center()(2)<.25);
+      return (cell->center()(0) < 0.25 && cell->center()(1) > 0.5 && cell->center()(1)< .75 && cell->center()(2)<.25);
     };
 
    for (auto &cell :
        triangulation.active_cell_iterators() | refinement_subdomain_predicate){
-      cell->set_refine_flag();
-       
-       
-
-
-
-    }
-
-   resolve_refine_flags_on_periodic_boundary();
-
-   triangulation.execute_coarsening_and_refinement();
+          cell->set_refine_flag();
+       }
+    bool changed=false;
+    do{
+      triangulation.prepare_coarsening_and_refinement();
+      exchange_refinement_flags();
+      changed=resolve_improved();
+      ++count;
+      
+    }while(changed);
+    std::cout<<count;
+    triangulation.execute_coarsening_and_refinement();
   }
+
+// while (changed)
+// {
+//   prepare();
+//   exchange();
+//   for all of my cells, if a periodic neighbor is marked refinement, set_refine_flag() and changed=true;
+
+// };
+
+  //  resolve_refine_flags_on_periodic_boundary();
+
+  
   
 
   template <int dim>
@@ -1077,7 +1162,7 @@ namespace Step45
     create_mesh();
     // std::cout<<count_periodic_faces();
 
-    for (unsigned int refinement_cycle = 2; refinement_cycle < 4;
+    for (unsigned int refinement_cycle = 2; refinement_cycle < 5;
          ++refinement_cycle)
       {
         pcout << "Refinement cycle " << refinement_cycle << std::endl;
