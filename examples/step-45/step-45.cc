@@ -366,7 +366,7 @@ namespace Step45
     triangulation.refine_global(2);
     output_results(0);
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
-      return (cell->center()(1) > 0.5 && cell->center()(1)<.75 && cell->center()(2)<.25);
+      return (cell->center()(1) > 0.75 && cell->center()(1)<1 && cell->center()(2)<.25);
     };
 
     for (auto &cell :
@@ -379,8 +379,8 @@ namespace Step45
 
 
 
-    // resolve_hanging_on_periodic_boundary();
     triangulation.execute_coarsening_and_refinement();
+    resolve_hanging_on_periodic_boundary();
     
 
     output_results(1);
@@ -893,20 +893,20 @@ namespace Step45
     
     
    
-   
+   triangulation.execute_coarsening_and_refinement();
       
   }
 
   template<int dim>
   bool StokesProblem<dim>::resolve_improved(){
     bool flags_set=false;
-    exchange_refinement_flags();
     for(auto &cell:triangulation.active_cell_iterators()){
       if(cell->at_boundary() && cell->refine_flag_set()){
         for(unsigned int i=0;i<cell->n_faces();++i){
           if(cell->has_periodic_neighbor(i)){
             TriaIterator<CellAccessor<dim,dim>> temp=cell->periodic_neighbor(i);
             if(temp->is_active()&&!temp->refine_flag_set()){
+              temp->clear_coarsen_flag();
               temp->set_refine_flag();
               flags_set=true;
             }
@@ -915,7 +915,7 @@ namespace Step45
         }
       }
     }
-    exchange_refinement_flags();
+
     return flags_set;
   }
   template<int dim>
@@ -1124,7 +1124,7 @@ int count=0;
   {
 
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
-      return (cell->center()(0) < 0.25 && cell->center()(1) > 0.5 && cell->center()(1)< .75 && cell->center()(2)<.25);
+      return (cell->center()(0) < 0.25 && cell->center()(1) > 0.75 && cell->center()(1)< 1 && cell->center()(2)<.25);
     };
 
    for (auto &cell :
@@ -1133,10 +1133,12 @@ int count=0;
        }
     bool changed=false;
     do{
+
       triangulation.prepare_coarsening_and_refinement();
       exchange_refinement_flags();
       changed=resolve_improved();
       ++count;
+      changed = (Utilities::MPI::max(changed?1:0,triangulation.get_communicator())==1) ? true : false;
       
     }while(changed);
     std::cout<<count;
