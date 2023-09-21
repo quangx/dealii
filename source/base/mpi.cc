@@ -1018,7 +1018,8 @@ namespace Utilities
       if (finalize_petscslepc)
         {
           PetscErrorCode ierr = SlepcFinalize();
-          AssertThrow(ierr == 0, SLEPcWrappers::SolverBase::ExcSLEPcError(ierr))
+          AssertThrow(ierr == 0,
+                      SLEPcWrappers::SolverBase::ExcSLEPcError(ierr));
         }
 #  else
       // or just end PETSc if we did so
