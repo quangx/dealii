@@ -89,6 +89,7 @@ namespace Step45
     void output_results(const unsigned int refinement_cycle) const;
     void refine_mesh();
     void resolve_hanging_on_periodic_boundary();
+    void resolve_hanging_on_periodic_boundary_2();
     void resolve_refine_flags_on_periodic_boundary();
     void exchange_refinement_flags();
     int count_periodic_faces();
@@ -374,16 +375,16 @@ namespace Step45
         cell->set_refine_flag();
        
       }
-
-    //  triangulation.add_periodicity(periodicity_vector);
-
+      triangulation.execute_coarsening_and_refinement();
 
 
-    triangulation.execute_coarsening_and_refinement();
-    resolve_hanging_on_periodic_boundary();
-    
+    resolve_hanging_on_periodic_boundary_2();
 
     output_results(1);
+
+    
+    
+
 
   }
 
@@ -764,6 +765,44 @@ namespace Step45
 
   
 
+
+  template<int dim>
+  void StokesProblem<dim>::resolve_hanging_on_periodic_boundary_2(){
+    for(auto & cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()){
+        cell->clear_refine_flag();
+      }
+    }
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()&& cell -> at_boundary()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            if(cell->periodic_neighbor_is_coarser(i)){
+              cell->periodic_neighbor(i)->set_refine_flag();
+              std::cout << "Marking a ghost!" << std::endl;
+            }
+          }
+        }
+      }
+    }
+    // exchange_refinement_flags();
+    for(auto& cell: triangulation.active_cell_iterators()){
+      if(//cell->is_locally_owned() &&
+       cell->is_ghost() && cell->at_boundary()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i) && cell->periodic_neighbor_is_coarser(i)){
+            cell->periodic_neighbor(i)->set_refine_flag();
+              std::cout << "Marking a locak!" << std::endl;
+
+          }
+        }
+
+      }
+    }
+   
+    triangulation.execute_coarsening_and_refinement();
+  }
+
   template<int dim>
   void StokesProblem<dim>::resolve_hanging_on_periodic_boundary(){
     // output_results(1);
@@ -918,22 +957,7 @@ namespace Step45
 
     return flags_set;
   }
-  template<int dim>
-  bool StokesProblem<dim>::resolve_improved_2(){
-    bool flags_set=false;
-    for(auto &cell:triangulation.active_cell_iterators()){
-      if(cell->at_boundary()){
-        for(int i=0;i<cell->n_faces();++i){
-          if(cell->has_periodic_neighbor(i) && cell->periodic_neighbor(i)->refine_flag_set()){
-            cell->set_refine_flag();
-            flags_set=true;
-          }
-        }
-      }
-    }
-    return flags_set;
-  }
-
+ 
   template<int dim>
   void StokesProblem<dim>::resolve_refine_flags_on_periodic_boundary(){
       int local_count=0;
