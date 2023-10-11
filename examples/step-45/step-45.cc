@@ -93,6 +93,8 @@ namespace Step45
     void resolve_refine_flags_on_periodic_boundary();
     void exchange_refinement_flags();
     int count_periodic_faces();
+    int verifier();
+
 
 
     const unsigned int degree;
@@ -312,6 +314,25 @@ namespace Step45
   // @endcond
   //
   // @sect3{Setting up periodicity constraints on distributed triangulations}
+  template<int dim>
+  int StokesProblem<dim>::verifier(){
+    Vector<float> debug_verifier(triangulation.n_active_cells());
+    int count=0;
+    for(auto& cell:triangulation.active_cell_iterators()){
+      if(cell->is_locally_owned()){
+        for(unsigned int i=0;i<cell->n_faces();++i){
+          if(cell->has_periodic_neighbor(i)){
+            if(cell->periodic_neighbor_is_coarser(i)){
+              // debug_verifier(cell->periodic_neighbor(i)->active_cell_index())
+              ++count;
+            }
+          }
+        }
+      }
+    }
+    return count;
+
+  }
   template <int dim>
   void StokesProblem<dim>::create_mesh()
   {
@@ -378,7 +399,7 @@ namespace Step45
       triangulation.execute_coarsening_and_refinement();
 
 
-    resolve_hanging_on_periodic_boundary_2();
+    // resolve_hanging_on_periodic_boundary_2();
 
     output_results(1);
 
@@ -734,6 +755,7 @@ namespace Step45
 
 
 
+
   template <int dim>
   void
   StokesProblem<dim>::output_results(const unsigned int refinement_cycle) const
@@ -754,9 +776,12 @@ namespace Step45
     //                          DataOut<dim>::type_dof_data,
     //                          data_component_interpretation);
     Vector<float> subdomain(triangulation.n_active_cells());
+    Vector<float> debug_verifier;
+
     for (unsigned int i = 0; i < subdomain.size(); ++i)
       subdomain(i) = triangulation.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
+    // data_out.add_data_vector(debug_verifier,"debug_verifier");
     data_out.build_patches();
 
     data_out.write_vtu_with_pvtu_record(
@@ -785,9 +810,9 @@ namespace Step45
         }
       }
     }
-    // exchange_refinement_flags();
+    
     for(auto& cell: triangulation.active_cell_iterators()){
-      if(//cell->is_locally_owned() &&
+      if(
        cell->is_ghost() && cell->at_boundary()){
         for(unsigned int i=0;i<cell->n_faces();++i){
           if(cell->has_periodic_neighbor(i) && cell->periodic_neighbor_is_coarser(i)){
@@ -1141,31 +1166,32 @@ namespace Step45
     (dof_handler, pack, unpack);
   }
 
-int count=0;
 
   template <int dim>
   void StokesProblem<dim>::refine_mesh()
   {
+    srand(std::time(nullptr));
 
     const auto refinement_subdomain_predicate = [&](const auto &cell) {
-      return (cell->center()(0) < 0.25 && cell->center()(1) > 0.75 && cell->center()(1)< 1 && cell->center()(2)<.25);
+      // return (cell->center()(0) < 0.25 && cell->center()(1) > 0.75 && cell->center()(1)< 1 && cell->center()(2)<.25);
+      return (rand()%100)<10;
     };
 
    for (auto &cell :
        triangulation.active_cell_iterators() | refinement_subdomain_predicate){
           cell->set_refine_flag();
        }
-    bool changed=false;
-    do{
+    // bool changed=false;
+  //   do{
 
-      triangulation.prepare_coarsening_and_refinement();
-      exchange_refinement_flags();
-      changed=resolve_improved();
-      ++count;
-      changed = (Utilities::MPI::max(changed?1:0,triangulation.get_communicator())==1) ? true : false;
+  //     triangulation.prepare_coarsening_and_refinement();
+  //     exchange_refinement_flags();
+
+  //     changed=resolve_improved();
+
+  //     changed = (Utilities::MPI::max(changed?1:0,triangulation.get_communicator())==1) ? true : false;
       
-    }while(changed);
-    std::cout<<count;
+  //   }while(changed);
     triangulation.execute_coarsening_and_refinement();
   }
 
@@ -1177,7 +1203,7 @@ int count=0;
 
 // };
 
-  //  resolve_refine_flags_on_periodic_boundary();
+//    resolve_refine_flags_on_periodic_boundary();
 
   
   
@@ -1201,6 +1227,9 @@ int count=0;
 
         pcout << std::endl;
       }
+      MPI_Barrier(MPI_COMM_WORLD);
+    std::cout<<"number of level differences across periodic boundary detected is "<<verifier()<<"\n";
+
   }
 } // namespace Step45
 
@@ -1249,6 +1278,7 @@ int main(int argc, char *argv[])
                 << std::endl;
       return 1;
     }
+    
 
   return 0;
 }
