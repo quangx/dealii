@@ -4639,6 +4639,7 @@ bool
 Triangulation<1, 3>::prepare_coarsening_and_refinement();
 
 
+
 extern template class Triangulation<1, 1>;
 extern template class Triangulation<1, 2>;
 extern template class Triangulation<1, 3>;

@@ -2587,7 +2587,7 @@ namespace parallel
                     const unsigned int vi0 =
                       topological_vertex_numbering[cell_1->face(face_no_1)
                                                      ->vertex_index(vface0)];
-                    const  unsigned int vi1 =
+                    const unsigned int vi1 =
                       topological_vertex_numbering[cell_2->face(face_no_2)
                                                      ->vertex_index(v)];
                     const unsigned int min_index = std::min(vi0, vi1);
@@ -2738,31 +2738,34 @@ namespace parallel
     } // namespace
 
 
-  template<int dim,int spacedim>
-  int count_periodic_faces(Triangulation<dim,spacedim> &tria){
-    unsigned int count=0;
-    for(auto &cell: tria.active_cell_iterators()){
-      if(cell -> is_locally_owned()){
-        bool neighbor_exists=false;
-        for(int i=0;i<cell->n_faces();++i){
-          if(cell->has_periodic_neighbor(i)){
-            neighbor_exists=true;
-          }
+    template <int dim, int spacedim>
+    int
+    count_periodic_faces(Triangulation<dim, spacedim> &tria)
+    {
+      unsigned int count = 0;
+      for (auto &cell : tria.active_cell_iterators())
+        {
+          if (cell->is_locally_owned())
+            {
+              bool neighbor_exists = false;
+              for (int i = 0; i < cell->n_faces(); ++i)
+                {
+                  if (cell->has_periodic_neighbor(i))
+                    {
+                      neighbor_exists = true;
+                    }
+                }
+              if (neighbor_exists)
+                {
+                  ++count;
+                }
+            }
         }
-        if(neighbor_exists){
-          ++count;
-        }
-      }
+
+      return count;
     }
 
-    return count;
-  }
 
-  
-
-
-  
-  
 
     template <int dim, int spacedim>
     DEAL_II_CXX20_REQUIRES((concepts::is_valid_dim_spacedim<dim, spacedim>))
@@ -2773,10 +2776,9 @@ namespace parallel
       unsigned int n_changes    = 0;
       do
         {
-
           n_changes += this->dealii::Triangulation<dim, spacedim>::
                          prepare_coarsening_and_refinement();
-          
+
           this->update_periodic_face_map();
           // enforce 2:1 mesh balance over periodic boundaries
           // resolve_refine_flags_on_periodic_boundary<dim,spacedim>(*this);
@@ -3257,60 +3259,70 @@ namespace parallel
       return owner_rank;
 #  endif // P4EST_SEARCH_LOCAL defined
     }
-  template<int dim,int spacedim>
-  bool resolve_refine_flags(Triangulation<dim,spacedim>& tria){
-    bool flags_set=false;
-    for(auto &cell: tria.active_cell_iterators()){
-      if(cell->at_boundary() && cell->refine_flag_set()){
-        for(unsigned int i=0;i<cell->n_faces();++i){
-          if(cell->has_periodic_neighbor(i)){
-            TriaIterator<CellAccessor<dim,spacedim>> temp=cell->periodic_neighbor(i);
-            if(temp->is_active()&&!temp->refine_flag_set()){
-              temp->clear_coarsen_flag();
-              temp->set_refine_flag();
-              flags_set=true;
+    template <int dim, int spacedim>
+    bool
+    resolve_refine_flags(Triangulation<dim, spacedim> &tria)
+    {
+      bool flags_set = false;
+      for (auto &cell : tria.active_cell_iterators())
+        {
+          if (cell->at_boundary() && cell->refine_flag_set())
+            {
+              for (unsigned int i = 0; i < cell->n_faces(); ++i)
+                {
+                  if (cell->has_periodic_neighbor(i))
+                    {
+                      TriaIterator<CellAccessor<dim, spacedim>> temp =
+                        cell->periodic_neighbor(i);
+                      if (temp->is_active() && !temp->refine_flag_set())
+                        {
+                          temp->clear_coarsen_flag();
+                          temp->set_refine_flag();
+                          flags_set = true;
+                        }
+                    }
+                }
             }
-          }
-         
         }
-      }
+
+      return flags_set;
     }
 
-    return flags_set;
-  }
-
-  template<int dim,int spacedim>
-  void exchange_refinement_flags(Triangulation<dim,spacedim> &tria)
-  {
-    // Communicate refinement flags on ghost cells from the owner of the
-    // cell. This is necessary to get consistent refinement, as mesh
-    // smoothing would undo some of the requested coarsening/refinement.
-
-    auto pack
-    = [] (const typename Triangulation<dim,spacedim>::active_cell_iterator &cell) -> std::uint8_t
+    template <int dim, int spacedim>
+    void
+    exchange_refinement_flags(Triangulation<dim, spacedim> &tria)
     {
-      if (cell->refine_flag_set())
-        return 1;
-      if (cell->coarsen_flag_set())
-        return 2;
-      return 0;
-    };
-    auto unpack
-    = [] (const typename Triangulation<dim,spacedim>::active_cell_iterator &cell, const std::uint8_t &flag) -> void
-    {
-      cell->clear_coarsen_flag();
-      cell->clear_refine_flag();
-      if (flag==1)
-        cell->set_refine_flag();
-      else if (flag==2)
-        cell->set_coarsen_flag();
-    };
+      // Communicate refinement flags on ghost cells from the owner of the
+      // cell. This is necessary to get consistent refinement, as mesh
+      // smoothing would undo some of the requested coarsening/refinement.
 
-    GridTools::exchange_cell_data_to_ghosts<std::uint8_t, Triangulation<dim,spacedim>>
-    (tria, pack, unpack);
-  }
+      auto pack =
+        [](const typename Triangulation<dim, spacedim>::active_cell_iterator
+             &cell) -> std::uint8_t {
+        if (cell->refine_flag_set())
+          return 1;
+        if (cell->coarsen_flag_set())
+          return 2;
+        return 0;
+      };
+      auto unpack =
+        [](const typename Triangulation<dim, spacedim>::active_cell_iterator
+             &                 cell,
+           const std::uint8_t &flag) -> void {
+        cell->clear_coarsen_flag();
+        cell->clear_refine_flag();
+        if (flag == 1)
+          cell->set_refine_flag();
+        else if (flag == 2)
+          cell->set_coarsen_flag();
+      };
 
-   template <int dim, int spacedim>
+      GridTools::exchange_cell_data_to_ghosts<std::uint8_t,
+                                              Triangulation<dim, spacedim>>(
+        tria, pack, unpack);
+    }
+
+    template <int dim, int spacedim>
     DEAL_II_CXX20_REQUIRES((concepts::is_valid_dim_spacedim<dim, spacedim>))
     void Triangulation<dim, spacedim>::execute_coarsening_and_refinement()
     {
@@ -3345,7 +3357,8 @@ namespace parallel
       //   if(
       //   cell->is_ghost() && cell->at_boundary()){
       //     for(unsigned int i=0;i<cell->n_faces();++i){
-      //       if(cell->has_periodic_neighbor(i) && cell->periodic_neighbor_is_coarser(i)){
+      //       if(cell->has_periodic_neighbor(i) &&
+      //       cell->periodic_neighbor_is_coarser(i)){
       //         cell->periodic_neighbor(i)->set_refine_flag();
       //           std::cout << "Marking a locak!" << std::endl;
 
@@ -3372,26 +3385,28 @@ namespace parallel
                   "Fatal Error: maximum refinement level of p4est reached."));
             }
         }
-   
+
 
       // signal that refinement is going to happen
-      bool changed=false;
-      do{
+      bool changed = false;
+      do
+        {
+          this->prepare_coarsening_and_refinement();
+          exchange_refinement_flags(*this);
+          changed = resolve_refine_flags(*this);
 
-        this->prepare_coarsening_and_refinement();
-        exchange_refinement_flags(*this);
-        changed=resolve_refine_flags(*this);
-
-        changed = (Utilities::MPI::max(changed?1:0,this->get_communicator())==1) ? true : false;
-        
-      }while(changed);
+          changed = (Utilities::MPI::max(changed ? 1 : 0,
+                                         this->get_communicator()) == 1) ?
+                      true :
+                      false;
+        }
+      while (changed);
       this->signals.pre_distributed_refinement();
 
       // now do the work we're supposed to do when we are in charge
       // make sure all flags are cleared on cells we don't own, since nothing
       // good can come of that if they are still around
-    
-   
+
 
 
       // count how many cells will be refined and coarsened, and allocate that
@@ -3442,7 +3457,7 @@ namespace parallel
       // since refinement and/or coarsening on the parallel forest
       // has happened, we need to update the quadrant cell relations
       update_cell_relations();
-      
+
       for (const auto &cell : this->active_cell_iterators())
         if (cell->is_ghost() || cell->is_artificial())
           {
@@ -3453,7 +3468,7 @@ namespace parallel
       // signals that parallel_forest has been refined and cell relations have
       // been updated
       this->signals.post_p4est_refinement();
-      
+
 
       // before repartitioning the mesh, save a copy of the current positions
       // of quadrants only if data needs to be transferred later
@@ -3612,23 +3627,32 @@ namespace parallel
 
       // signal that refinement is finished
       this->signals.post_distributed_refinement();
-      unsigned int difference_count=0;
-      for(auto& cell:this->active_cell_iterators()){ //verifies that cells have same level across periodic boundary
-        if(cell->is_locally_owned()){
-          for(unsigned int i=0;i<cell->n_faces();++i){
-            if(cell->has_periodic_neighbor(i)){
-              if(cell->periodic_neighbor_is_coarser(i)){
-                ++difference_count;
-              }
+      unsigned int difference_count = 0;
+      for (auto &cell : this->active_cell_iterators())
+        { // verifies that cells have same level across periodic boundary
+          if (cell->is_locally_owned())
+            {
+              for (unsigned int i = 0; i < cell->n_faces(); ++i)
+                {
+                  if (cell->has_periodic_neighbor(i))
+                    {
+                      if (cell->periodic_neighbor_is_coarser(i))
+                        {
+                          ++difference_count;
+                        }
+                    }
+                }
             }
-          }
-      }
-     }
-     MPI_Barrier(this->get_communicator());
-     bool consistent=(Utilities::MPI::max(difference_count!=0?1:0,this->get_communicator())==0) ? true : false; //if difference is 0 across all ranks return true
-     Assert(consistent,ExcMessage("Level difference across periodic boundaries detected"));
-
-
+        }
+      MPI_Barrier(this->get_communicator());
+      bool consistent =
+        (Utilities::MPI::max(difference_count != 0 ? 1 : 0,
+                             this->get_communicator()) == 0) ?
+          true :
+          false; // if difference is 0 across all ranks return true
+      Assert(consistent,
+             ExcMessage(
+               "Level difference across periodic boundaries detected"));
     }
 
 
