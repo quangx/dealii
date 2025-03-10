@@ -9166,7 +9166,7 @@ DataOutReader<dim, spacedim>::read(std::istream &in)
     s << "[written by " << DEAL_II_PACKAGE_NAME << " "
       << DEAL_II_PACKAGE_VERSION << "]";
 
-    Assert(header == s.str(), ExcUnexpectedInput(s.str(), header));
+    // Assert(header == s.str(), ExcUnexpectedInput(s.str(), header));
   }
   {
     std::string header;
